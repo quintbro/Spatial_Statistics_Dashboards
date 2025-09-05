@@ -1,7 +1,0 @@
-project:
-  type: website
-
-format:
-  html:
-    resources:
-      - shinylive-sw.js
