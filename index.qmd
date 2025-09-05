@@ -1,13 +1,11 @@
 ---
 title: "Homework 1 Spatial Statistics"
-format: 
-  dashboard: 
-    resources: 
-      - shinylive-sw.js
+format: dashboard
 server: shiny
 ---
 
-```{r output=FALSE}
+
+```{r}
 #| context: setup
 library(tidyverse)
 library(tidycensus)
@@ -20,15 +18,35 @@ library(sf)
 theme_set(theme_bw())
 ```
 
-
-
 ## Top Row
 
 ### Column
-```{r output=FALSE}
-covid <- vroom::vroom("time_series_covid19_confirmed_US.csv") %>%
+
+```{r}
+#| title: "Population vs COVID Rates"
+plotlyOutput("scatter")
+```
+
+### Column
+```{r}
+#| title: "Chloropleth Map"
+leafletOutput("map")
+```
+
+
+## Bottom Row
+
+```{r}
+DTOutput("table")
+```
+
+
+
+```{r}
+#| context: server
+covid <- vroom::vroom("~/Spatial Statistics/data/time_series_covid19_confirmed_US.csv") %>%
   mutate(FIPS = as.character(FIPS)) %>%
-  dplyr::select(FIPS, "1/15/22")
+  dplyr::select(FIPS, Lat, Long_, "1/15/22")
 
 
 data_sf <- get_acs(
@@ -46,59 +64,7 @@ merge_data = left_join(data_sf, covid, join_by(GEOID == FIPS))
 data <- merge_data %>%
   mutate(rate = `1/15/22` / estimate) %>%
   mutate(NAME = str_remove(NAME, ", Texas"))
-```
 
-```{r warning =FALSE}
-#| title: "Population by COVID Rate"
-#| padding: 0px
-
-
-# ggplot(data) +
-#   geom_sf(aes(fill = rate)) + 
-#   scale_fill_distiller(palette = "Spectral") +
-#   theme_void() +
-#   theme(plot.title = element_text(hjust = 0.5)) +
-#   labs(
-#     title = "Chlorapleth Map of COVID Rates"
-#   )
-
-plot <- ggplot(data) +
-  geom_point(aes(x = (estimate / 1000), y = rate)) +
-  labs(
-    x = "Population (In Thousands)",
-    y = "Covid Rate"
-  )
-  
-
-ggplotly(plot)
-```
-
-### Column
-
-```{r}
-#| title: "Leaflet Interactive Map"
-#| padding: 0px
-pal <- colorNumeric(palette = rev(RColorBrewer::brewer.pal(11, "Spectral")), domain = data$rate)
-
-labels <- sprintf("<strong>Name:</strong> %s<br/><strong>COVID Rate:</strong> %g%%", 
-                  data$NAME, round(100*data$rate, 2)) %>%
-  lapply(htmltools::HTML)
-
-leaflet() %>%
-  addTiles() %>%
-  setView(lat = 31.9686, lng = -99.9018, zoom = 5) %>%
-  addPolygons(data = data, 
-              color = pal(data$rate), 
-              stroke = F, 
-              fillOpacity = 1,
-              label = labels,
-              layerId = ~NAME) %>%
-  addPolylines(data = data, color = "black", weight = 0.3, opacity = 1)
-```
-
-## Row
-
-```{r}
 table_data <- data %>%
   tibble() %>%
   select(NAME, estimate, "1/15/22", rate) %>%
@@ -107,15 +73,117 @@ table_data <- data %>%
   arrange(desc(Rate)) %>%
   mutate("Top 10" = c(rep(TRUE, 10), rep(FALSE, nrow(data) - 10)))
 
-datatable(
-  table_data,
-  options = list(pagelength = 5, autowidth = T)
-) %>%
-  formatStyle("Top 10",
-              target = "row",
-              backgroundColor = styleEqual(
-                c(TRUE, FALSE),
-                c("#FFE5DE", NA)
-              ))
+# create a reactive value to store the ID
+selected_rows <- reactiveVal(NULL)
+
+# render scatterplot
+output$scatter <- renderPlotly({
+  ggplotly(
+    ggplot(data) +
+    geom_point(aes(x = (estimate / 1000), y = rate)) +
+    labs(
+      x = "Population (In Thousands)",
+      y = "Covid Rate"
+    )
+  )
+})
+
+
+
+# Render Leaflet
+
+pal <- colorNumeric(palette = rev(RColorBrewer::brewer.pal(11, "Spectral")), domain = data$rate)
+
+labels <- sprintf("<strong>Name:</strong> %s<br/><strong>COVID Rate:</strong> %g%%", 
+                  data$NAME, round(100*data$rate, 2)) %>%
+  lapply(htmltools::HTML)
+
+
+# Renders the base map just once
+output$map <- renderLeaflet({
+  leaflet() %>%
+  addTiles()
+})
+
+
+# This observer redraws polygons whenever the selection changes
+observe({
+  selection <- selected_rows()
+  
+  proxy <- leafletProxy("map", data = data) %>%
+    clearShapes() # Clear existing polygons and polylines
+
+  if (is.null(selection)) {
+    # If nothing is selected, draw all polygons with default opacity
+    proxy %>%
+      addPolygons(color = ~pal(rate), 
+                  stroke = F, 
+                  fillOpacity = 0.7,
+                  label = labels,
+                  layerId = ~NAME) %>%
+      addPolylines(color = "black", weight = 0.3, opacity = 1) %>%
+      setView(lat = 31.9686, lng = -99.9018, zoom = 5)
+  } else {
+    # If a county IS selected, draw the unselected and selected separately
+    
+    # Unselected polygons (low opacity)
+    unselected_data <- data %>% filter(NAME != selection)
+    proxy %>%
+      addPolygons(data = unselected_data,
+                  color = ~pal(rate), 
+                  stroke = F, 
+                  fillOpacity = 0.3, # Low opacity for unselected
+                  label = labels,
+                  layerId = ~NAME)
+      
+    # Selected polygon (high opacity)
+    selected_data <- data %>% filter(NAME == selection)
+    proxy %>%
+      addPolygons(data = selected_data,
+                  color = ~pal(rate), 
+                  stroke = F, 
+                  fillOpacity = 1.0, # High opacity for selected
+                  label = labels,
+                  layerId = ~NAME) %>%
+      # Add polylines over everything for a clean look
+      addPolylines(data = data, color = "black", weight = 0.3, opacity = 1) %>%
+      setView(lat = selected_data$Lat, lng = selected_data$Long_, zoom = 8)
+  }
+})
+
+
+observeEvent(input$map_shape_click, {
+  clicked_id <- input$map_shape_click$id
+  # Toggle selection: if the same polygon is clicked again, deselect it
+  if (!is.null(selected_rows()) && selected_rows() == clicked_id) {
+    selected_rows(NULL) # Clear selection
+  } else {
+    selected_rows(clicked_id) # Set selection
+  }
+})
+
+filtered_data <- reactive({
+  if(is.null(selected_rows())){
+    return(table_data)
+  } else {
+    table_data %>%
+      filter(County == selected_rows())
+  }
+})
+
+# render Table
+
+output$table <- renderDT({
+  datatable(
+    filtered_data(),
+    options = list(pagelength = 5, autowidth = T)
+  ) %>%
+    formatStyle("Top 10",
+                target = "row",
+                backgroundColor = styleEqual(
+                  c(TRUE, FALSE),
+                  c("#FFE5DE", NA)
+                ))
+})
 ```
 
