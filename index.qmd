@@ -1,6 +1,9 @@
 ---
 title: "Homework 1 Spatial Statistics"
-format: dashboard
+format: 
+  dashboard: 
+    resources: 
+      - shinylive-sw.js
 server: shiny
 ---
 
