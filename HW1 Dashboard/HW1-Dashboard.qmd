@@ -1,0 +1,245 @@
+---
+title: "Homework 1 Spatial Statistics"
+author: "Riley Wilkinson"
+format: 
+  dashboard:
+    orientation: columns
+---
+
+```{r output=FALSE}
+library(tidyverse)
+library(tidycensus)
+library(plotly)
+library(leaflet)
+library(htmltools)
+library(htmlwidgets)
+library(ggspatial)
+library(DT)
+library(sf)
+library(ggimage)
+theme_set(theme_bw())
+
+covid <- vroom::vroom("~/Spatial Statistics/data/time_series_covid19_confirmed_US.csv") %>%
+  mutate(FIPS = as.character(FIPS)) %>%
+  dplyr::select(FIPS, "1/15/22")
+
+
+data_sf <- get_acs(
+  geography = "county",
+  variables = "B01003_001",
+  state = "TX",
+  geometry = T,
+  year = 2022
+)
+
+
+
+merge_data = left_join(data_sf, covid, join_by(GEOID == FIPS))
+
+data <- merge_data %>%
+  mutate(rate = `1/15/22` / estimate) %>%
+  mutate(NAME = str_remove(NAME, ", Texas"))
+```
+
+# Question 1: County COVID Cases
+
+## Left Column
+
+### Top Row {height=30%}
+
+#### First KPI
+```{r}
+#| content: valuebox
+#| title: "Avg COVID Rate"
+#| align: center
+list(
+  value = round(sum(data$estimate) / sum(data$`1/15/22`), 2),
+  color = "info",
+  icon = "hospital"
+)
+```
+
+#### Second KPI
+```{r}
+#| content: valuebox
+#| title: "Texas Population"
+#| align: center
+
+list(
+  value = paste0(round(sum(data$estimate) / 1000000, 1), "M"),
+  icon = "people",
+  color = "light"
+)
+```
+
+
+### Bottom Row {height=70%}
+
+```{r}
+#| padding: 0px
+#| title: "Counties with Highest COVID Rates"
+table_data <- data %>%
+  tibble() %>%
+  select(NAME, estimate, "1/15/22", rate) %>%
+  rename(County = NAME, Population = estimate, "Covid" = "1/15/22", Rate = rate) %>%
+  mutate(Rate = round(Rate*100, 3)) %>%
+  arrange(desc(Rate)) %>%
+  mutate("Top 10" = c(rep(TRUE, 10), rep(FALSE, nrow(data) - 10)))
+
+datatable(
+  table_data,
+  options = list(pagelength = 5, autowidth = T,
+                 columnDefs = list(list(visible = FALSE, targets = c( 5))),
+                 info = FALSE),
+  class = "compact",
+  caption = htmltools::tags$caption(
+    style = "caption-side: top; text-align: left; font-weight: bold;",
+    "Top 10 Counties Colored Red"
+  )
+) %>%
+  formatStyle("Top 10",
+              target = "row",
+              backgroundColor = styleEqual(
+                c(T, F),
+                c("#FFE5DE", NA)
+              ))
+```
+
+## Right Column
+
+```{r}
+#| title: "Leaflet Interactive Map"
+#| padding: 0px
+pal <- colorNumeric(palette = rev(RColorBrewer::brewer.pal(11, "Spectral")), domain = data$rate)
+
+labels <- sprintf("<strong>Name:</strong> %s<br/><strong>COVID Rate:</strong> %g%%", 
+                  data$NAME, round(100*data$rate, 2)) %>%
+  lapply(htmltools::HTML)
+
+leaflet() %>%
+  addTiles() %>%
+  setView(lat = 31.9686, lng = -99.9018, zoom = 5) %>%
+  addPolygons(data = data, 
+              color = pal(data$rate), 
+              stroke = F, 
+              fillOpacity = 1,
+              label = labels,
+              layerId = ~NAME) %>%
+  addPolylines(data = data, color = "black", weight = 0.3, opacity = 1)
+```
+
+# Question 2: College Station Gas Stations
+
+```{r output = FALSE}
+gs <- vroom::vroom("~/Spatial Statistics/data/CS_GasStations.csv") %>%
+  mutate(image = "~/Spatial Statistics/data/gas-pump.png")
+
+gs_labels <- sprintf("<strong>Name:</strong> %s<br/><strong>Visit Counts:</strong> %g", 
+                  gs$name, gs$raw_visit_counts) %>%
+  lapply(htmltools::HTML)
+
+gs_popups <- sprintf("<strong>%s</strong> <i>%g<i/><br/>%s",
+                     gs$name, gs$raw_visit_counts, gs$address) %>%
+  lapply(htmltools::HTML)
+
+pal <- colorNumeric(
+  palette = "YlOrRd",
+  domain = gs$raw_visit_counts
+)
+```
+## First Column {.tabset}
+
+```{r}
+#| title: "Leaflet Plot"
+#| padding: 0px
+
+map_gs <- st_as_sf(gs,
+                   coords = c("longitude", "latitude"),
+                   crs = 4326)
+bbox <- st_bbox(map_gs)
+longitude_center <- (bbox['xmin'] + bbox['xmax']) * .5
+latitude_center <- (bbox["ymin"] + bbox["ymax"]) * .5
+
+leaflet(data = gs) %>%
+  addTiles() %>%
+  setView(lat = latitude_center[[1]], lng = longitude_center[[1]], zoom = 12) %>%
+  addCircleMarkers(lat = ~latitude, lng = ~longitude,
+             label = gs_labels,
+             popup = gs_popups,
+             fillColor = ~pal(raw_visit_counts),
+             fillOpacity = 1,
+             color = "black",
+             weight = 0.8)
+```
+
+```{r message=FALSE}
+#| title: "Static ggplot"
+#| padding: 0px
+map_gs <- st_as_sf(gs,
+                   coords = c("longitude", "latitude"),
+                   crs = 4326)
+
+map_gs_3857 <- st_transform(map_gs, crs = 3857)
+bbox <- st_bbox(map_gs_3857)
+new_bbox <- bbox + c(-7000, -600, 7000, 600)
+
+
+basemaps::basemap_ggplot(new_bbox, increase_zoom = 1, verbose = F) +
+  geom_sf(data = map_gs_3857,
+          mapping = aes(color = raw_visit_counts),
+          size = 4) +
+  scale_color_distiller(palette = "YlOrRd", direction = 1) +
+  theme_void() +
+  theme(legend.position = c(0.8, 0.7),
+        legend.background = element_rect(fill = "transparent", color = "transparent"),
+        plot.margin = margin(0,0,0,0)) +
+  labs(
+    color = "Visit Counts"
+  )
+```
+
+```{r message=FALSE}
+#| title: "Fun ggplot"
+#| padding: 0px
+coords <- st_coordinates(map_gs_3857) 
+basemaps::basemap_ggplot(new_bbox, increase_zoom = 1, verbose = F) +
+  geom_image(aes(x = X, y = Y, image = gs$image, color = gs$raw_visit_counts), 
+             data = coords) +
+  scale_color_distiller(palette = 'YlOrRd', direction = 1) +
+  theme_void() +
+  theme(legend.position = c(0.8, 0.7),
+        legend.background = element_rect(fill = "transparent", color = "transparent"),
+        plot.margin = margin(0,0,0,0)) +
+  labs(
+    color = "Visit Counts"
+  )
+```
+## Second Column
+
+```{r}
+#| padding: 0px
+gs_table <- gs %>%
+  select(name, address, raw_visit_counts) %>%
+  arrange(desc(raw_visit_counts)) %>% 
+  rename(Name = name, Address = address, `Visit Counts` = raw_visit_counts) %>%
+  mutate(top3 = c(rep(T, 3), rep(F, nrow(gs) - 3)))
+
+datatable(
+  gs_table,
+  options = list(pagelength = 5, autowidth = T,
+                 columnDefs = list(list(visible = FALSE, targets = 4)),
+                 info = FALSE),
+  class = "compact",
+  caption = htmltools::tags$caption(
+    style = "caption-side: top; text-align: left; font-weight: bold;",
+    "Top 3 Gas Stations Colored Red"
+  )
+) %>%
+  formatStyle("top3",
+              target = "row",
+              backgroundColor = styleEqual(
+                c(T, F),
+                c("#FFE5DE", NA)
+              ))
+```
+
