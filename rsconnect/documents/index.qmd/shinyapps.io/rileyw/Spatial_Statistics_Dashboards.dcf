@@ -1,0 +1,14 @@
+name: Spatial_Statistics_Dashboards
+title: Spatial_Statistics_Dashboards
+username: rileyw
+account: rileyw
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 15363390
+bundleId: 10870737
+url: https://rileyw.shinyapps.io/Spatial_Statistics_Dashboards/
+version: 1
+quarto_version: 1.5.57
+quarto_engines: knitr
+asMultiple: FALSE
+asStatic: FALSE
